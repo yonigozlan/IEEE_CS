@@ -3,15 +3,15 @@ import os
 # Force Keras on CPU
 # os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
-import cv2     # for capturing videos
-import math   # for mathematical operations
-import matplotlib.pyplot as plt    # for plotting the images
+import cv2    
+import matplotlib.pyplot as plt   
 import pandas as pd
-from keras.preprocessing import image   # for preprocessing the images
-import numpy as np    # for mathematical operations
+from keras.preprocessing import image   
+import numpy as np   
 from keras.utils import np_utils
-from skimage.transform import resize   # for resizing images
-from glob import glob
+from skimage.transform import resize  
+from openpyxl import load_workbook
+
 from keras.layers import TimeDistributed, GRU, Dense, Dropout, LayerNormalization, ConvLSTM2D
 
 from keras.layers import Conv2D, BatchNormalization, \
@@ -21,16 +21,23 @@ import keras
 
 import tensorflow as tf
 from tensorflow.python.keras.layers.convolutional import Conv2DTranspose
+
+# Fichier pour faire des tests d'apprentissages supervisés, seulement sur les images pour l'instant
+
+
 print(tf.test.is_built_with_cuda())
 print(tf.config.list_physical_devices())
-# gpu_options = tf.GPUOptions(allow_growth=True)
-# session = tf.InteractiveSession(config=tf.ConfigProto(gpu_options=gpu_options))
 
+# nombre de frames par séquence
 NBFRAME = 5
+# taille des images après redimensionnement pour fit
 SIZE = (112, 112)
-CHANNELS = 3 # 1 if greyscale
+# TODO : convertir image en greyscale pour entrainement
 
-def defineTrainSets(NBFRAME = NBFRAME, SIZE = SIZE, CHANNELS=CHANNELS):
+
+# création des séquences d'images pour entrainement et validation
+
+def defineTrainSets(NBFRAME = NBFRAME, SIZE = SIZE):
     trainList = []
     testList = []
 
@@ -121,6 +128,83 @@ def defineTrainSets(NBFRAME = NBFRAME, SIZE = SIZE, CHANNELS=CHANNELS):
 
     return trainListFrames, testListFrames, trainListFramesClass, testListFramesClass
 
+# création des séquences de données IMU pour entrainement et validation (pas fini!)
+def defineTrainTestSetsIMU(NBFRAME = NBFRAME, SIZE = SIZE):
+    trainList = []
+    testList = []
+
+    anomaly_path = 'anomalyIMU/'
+    normal_path = 'normalIMU/'
+    count=0
+    for entry in os.listdir(anomaly_path):
+        path = os.path.join(anomaly_path, entry)
+        if os.path.isdir(path):
+            if count == 4:
+                testList.append(path)
+            else :
+                trainList.append(path)
+            count+=1
+    count=0
+    for entry in os.listdir(normal_path):
+        path = os.path.join(normal_path, entry)
+        if os.path.isdir(path):
+            if count == 4:
+                testList.append(path)
+            else :
+                trainList.append(path)
+            count+=1
+
+    trainListSeries = []
+    trainListSeriesClass = []
+    for folder in trainList:
+        className = folder.split('/')[0][:-3]
+        print(className)
+        data = os.listdir(folder)
+        wb = load_workbook(filename = folder+'/' + data[0])
+        sheets = wb.worksheets[1:]
+        features = []
+        for sheet in sheets:
+            feature = []
+            for val in sheet['B'][:15]:
+                feature.append(val.value)
+            features.append(feature)
+        if className == 'anomaly':
+            trainListSeriesClass.append([0,1])
+        else:
+            trainListSeriesClass.append([1,0])
+        trainListSeries.append(features)
+    
+
+    trainListSeries = np.asarray(trainListSeries)
+    trainListSeriesClass = np.array(trainListSeriesClass)
+
+    testListSeries = []
+    testListSeriesClass = []
+    for folder in testList:
+        className = folder.split('/')[0][:-3]
+        print(className)
+        data = os.listdir(folder)
+        wb = load_workbook(filename = folder+'/' + data[0])
+        sheets = wb.worksheets[1:]
+        features = []
+        for sheet in sheets:
+            feature = []
+            for val in sheet['B'][:15]:
+                feature.append(val.value)
+            features.append(feature)
+        if className == 'anomaly':
+            testListSeriesClass.append([0,1])
+        else:
+            testListSeriesClass.append([1,0])
+    
+    testListSeries = np.array(testListSeries)
+    testListSeriesClass = np.array(testListSeriesClass)
+
+
+    return trainListSeries, testListSeries, trainListSeriesClass, testListSeriesClass
+
+# build_convnet_encoder et build_convnet_decoder ne sont pas utilisées pour l'instant,
+# utilisation d'un autre autoencoder à la place
 def build_convnet_encoder(shape=(112, 112, 3)):
     momentum = .9
     model = keras.Sequential()
@@ -150,7 +234,8 @@ def build_convnet_decoder():
     # model.add(GlobalMaxPool2D())
     return model
 
-def autoencoder_model(shape=(5, 112, 112, 3), nbout=2):
+# autoencoder TimeDistributed Conv2D et ConvLSTM2D, 
+def autoencoder_model(shape=(5, 112, 112, 3)):
     
 
     seq = keras.Sequential()
@@ -176,7 +261,8 @@ def autoencoder_model(shape=(5, 112, 112, 3), nbout=2):
 
     return seq
 
-def autoencoder_modelV2(shape=(5, 112, 112, 3), nbout=2):
+# test d'un autre autoencoder, non fonctionnel pour l'instant
+def autoencoder_modelV2(shape=(5, 112, 112, 3)):
     # Create our convnet with (112, 112, 3) input shape
     convnet_encoder = build_convnet_encoder(shape[1:])
     
@@ -196,13 +282,15 @@ def autoencoder_modelV2(shape=(5, 112, 112, 3), nbout=2):
     model.add(TimeDistributed(Conv2D(3, (11, 11), activation="sigmoid", padding="same")))
     return model
 
+# fonction à appeler pour entraîner un model, entraîne uniquement sur les données normales (semi-supervised)
+# (à modifier pour rendre plus modulable pour l'instant il faut modifier la fnction si on veut entraîner un autre model)
 def train_model():
 
     X_train, X_test, y_train, y_test = defineTrainSets()
 
 
 
-    INSHAPE=(NBFRAME,) + SIZE + (CHANNELS,) # (5, 112, 112, 3)
+    INSHAPE=(NBFRAME,) + SIZE + (3,) # (5, 112, 112, 3)
     model = autoencoder_model(INSHAPE, 2)
 
     model.compile(loss='mse', optimizer=keras.optimizers.Adam(lr=1e-4, decay=1e-5, epsilon=1e-6))
@@ -224,7 +312,11 @@ def train_model():
         epochs=EPOCHS,
         callbacks=callbacks
     )
-
+# fonction à appeler pour faire des tests avec un model enregistré, sur une série de séquence
+# enregistre les images prédites, et renvoie un graphe de la régularité des prédictions au fil des séquences,
+# détecte au moins une anomalie dans une suite de séquences d'anomalies,
+# mais classifie une partie des séquences des anomalies comme normales
+# est-ce le comportement voulu? (on trouve bien une anomalie dans chaque "vidéo" d'anomalie)
 def testSample(folderPath, model):
     kModel = keras.models.load_model(model)
     sampleList = []
@@ -266,6 +358,8 @@ def testSample(folderPath, model):
     plt.show()
     return predictions
 
+# expérimentation avec l'optical flow pour utliser en données d'entraînement, pas testé encore,
+# mais données obtenues pas très propres
 def optical_flow(folderPath):
     imgs = os.listdir(folderPath)
     nbImgs = len(imgs)
@@ -290,16 +384,3 @@ def optical_flow(folderPath):
                 os.makedirs("./optical_flow/" + folderPath)
         cv2.imwrite("./optical_flow/" + folderPath+'/' +str(i)+'.jpeg', rgb)
 
-
-# optical_flow('sampleTestA')
-
-INSHAPE=(NBFRAME,) + SIZE + (CHANNELS,) # (5, 112, 112, 3)
-model = autoencoder_model(INSHAPE, 2)
-print(model.summary())
-
-# train_model()
-predictionsA = testSample('sampleTestA', 'bestUnsupervisedModelNormalOnly.hdf5')
-# print(predictionsA)
-# print('_________________________________________________')
-# predictionsN = testSample('sampleTestN', 'bestUnsupervisedModelNormalOnly.hdf5')
-# print(predictionsN)

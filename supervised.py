@@ -3,14 +3,13 @@ import os
 # Force Keras on CPU
 # os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 
-import cv2     # for capturing videos
-import math   # for mathematical operations
-import matplotlib.pyplot as plt    # for plotting the images
+import cv2   
+import matplotlib.pyplot as plt    
 import pandas as pd
-from keras.preprocessing import image   # for preprocessing the images
-import numpy as np    # for mathematical operations
+from keras.preprocessing import image   
+import numpy as np   
 from keras.utils import np_utils
-from skimage.transform import resize   # for resizing images
+from skimage.transform import resize   
 from openpyxl import load_workbook
 
 from keras.layers import TimeDistributed, GRU, Dense, Dropout, LayerNormalization, ConvLSTM2D
@@ -21,16 +20,23 @@ from keras.layers import Conv2D, BatchNormalization, \
 import keras
 
 import tensorflow as tf
+
+
+# Fichier pour faire des tests d'apprentissages supervisés, seulement sur les images pour l'instant
+
+
 print(tf.test.is_built_with_cuda())
 print(tf.config.list_physical_devices())
-# gpu_options = tf.GPUOptions(allow_growth=True)
-# session = tf.InteractiveSession(config=tf.ConfigProto(gpu_options=gpu_options))
 
+# nombre de frames par séquence
 NBFRAME = 5
+# taille des images après redimensionnement pour fit
 SIZE = (112, 112)
-CHANNELS = 3 # 1 if greyscale
+# TODO : convertir image en greyscale pour entrainement
 
-def defineTrainTestSets(NBFRAME = NBFRAME, SIZE = SIZE, CHANNELS=CHANNELS):
+
+# création des séquences d'images pour entrainement et validation
+def defineTrainTestSets(NBFRAME = NBFRAME, SIZE = SIZE):
     trainList = []
     testList = []
 
@@ -66,14 +72,10 @@ def defineTrainTestSets(NBFRAME = NBFRAME, SIZE = SIZE, CHANNELS=CHANNELS):
             train_frames = []
             for j in range(NBFRAME):
                 imgPath = folder+'/'+imgs[i+j]
-                # loading the image and keeping the target size as (224,224,3)
                 img = image.load_img(imgPath, target_size=SIZE+(3,))
-                # img.show()
-                # converting it to array
                 img = image.img_to_array(img)
                 # normalizing the pixel value
                 img = img/255
-                # appending the image to the train_image list
                 train_frames.append(img)
             trainListFrames.append(train_frames)
             if className == 'anomaly':
@@ -82,12 +84,11 @@ def defineTrainTestSets(NBFRAME = NBFRAME, SIZE = SIZE, CHANNELS=CHANNELS):
                 trainListFramesClass.append([1,0])
     trainListFrames = np.array(trainListFrames)
     trainListFramesClass = np.array(trainListFramesClass)
-    print(trainListFrames.shape)
+
     testListFrames = []
     testListFramesClass = []
     for folder in testList:
         className = folder.split('/')[0]
-        print(className)
         imgs = os.listdir(folder)
         nbImgs = len(imgs)
         for i in range(nbImgs-NBFRAME):
@@ -121,7 +122,8 @@ def defineTrainTestSets(NBFRAME = NBFRAME, SIZE = SIZE, CHANNELS=CHANNELS):
 
     return trainListFrames, testListFrames, trainListFramesClass, testListFramesClass
 
-def defineTrainTestSetsIMU(NBFRAME = NBFRAME, SIZE = SIZE, CHANNELS=CHANNELS):
+# création des séquences de données IMU pour entrainement et validation (pas fini!)
+def defineTrainTestSetsIMU(NBFRAME = NBFRAME, SIZE = SIZE):
     trainList = []
     testList = []
 
@@ -168,8 +170,6 @@ def defineTrainTestSetsIMU(NBFRAME = NBFRAME, SIZE = SIZE, CHANNELS=CHANNELS):
     
 
     trainListSeries = np.asarray(trainListSeries)
-    print(trainListSeries.shape)
-    print(type(trainListSeries[0]))
     trainListSeriesClass = np.array(trainListSeriesClass)
 
     testListSeries = []
@@ -180,7 +180,12 @@ def defineTrainTestSetsIMU(NBFRAME = NBFRAME, SIZE = SIZE, CHANNELS=CHANNELS):
         data = os.listdir(folder)
         wb = load_workbook(filename = folder+'/' + data[0])
         sheets = wb.worksheets[1:]
-        print(sheets)
+        features = []
+        for sheet in sheets:
+            feature = []
+            for val in sheet['B'][:15]:
+                feature.append(val.value)
+            features.append(feature)
         if className == 'anomaly':
             testListSeriesClass.append([0,1])
         else:
@@ -192,30 +197,17 @@ def defineTrainTestSetsIMU(NBFRAME = NBFRAME, SIZE = SIZE, CHANNELS=CHANNELS):
 
     return trainListSeries, testListSeries, trainListSeriesClass, testListSeriesClass
 
+# les fonctions build_convnet et action_model proviennent d'internet,
+# et créent un model à base de TimeDistributed CONV2D et de GRU, fonctionne super bien avec notre dataset 
 def build_convnet(shape=(112, 112, 3)):
     momentum = .9
     model = keras.Sequential()
-    model.add(Conv2D(64, (3,3), input_shape=shape,
+    model.add(Conv2D(128, (3,3), input_shape=shape,
         padding='same', activation='relu'))
+    model.add(BatchNormalization(momentum=momentum))
+    
+    model.add(MaxPool2D())
     model.add(Conv2D(64, (3,3), padding='same', activation='relu'))
-    model.add(BatchNormalization(momentum=momentum))
-    
-    model.add(MaxPool2D())
-    
-    model.add(Conv2D(128, (3,3), padding='same', activation='relu'))
-    model.add(Conv2D(128, (3,3), padding='same', activation='relu'))
-    model.add(BatchNormalization(momentum=momentum))
-    
-    model.add(MaxPool2D())
-    
-    model.add(Conv2D(256, (3,3), padding='same', activation='relu'))
-    model.add(Conv2D(256, (3,3), padding='same', activation='relu'))
-    model.add(BatchNormalization(momentum=momentum))
-    
-    model.add(MaxPool2D())
-    
-    model.add(Conv2D(512, (3,3), padding='same', activation='relu'))
-    model.add(Conv2D(512, (3,3), padding='same', activation='relu'))
     model.add(BatchNormalization(momentum=momentum))
     
     # flatten...
@@ -233,9 +225,7 @@ def action_model(shape=(5, 112, 112, 3), nbout=2):
     # here, you can also use GRU or LSTM
     model.add(GRU(64))
     # and finally, we make a decision network
-    model.add(Dense(1024, activation='relu'))
-    model.add(Dropout(.5))
-    model.add(Dense(512, activation='relu'))
+    model.add(Dense(256, activation='relu'))
     model.add(Dropout(.5))
     model.add(Dense(128, activation='relu'))
     model.add(Dropout(.5))
@@ -243,6 +233,7 @@ def action_model(shape=(5, 112, 112, 3), nbout=2):
     model.add(Dense(nbout, activation='sigmoid'))
     return model
 
+# test de classification avec la partie encoder du fichier unsupervised.py, pas de bonnes performances, à revoir?
 def autoencoder_modelLSTM(shape=(5, 112, 112, 3), nbout=2):
     
 
@@ -265,11 +256,13 @@ def autoencoder_modelLSTM(shape=(5, 112, 112, 3), nbout=2):
 
     return seq
 
+# fonction à appeler pour entraîner un model 
+# (à modifier pour rendre plus modulable pour l'instant il faut modifier la fnction si on veut entraîner un autre model)
 def train_model():
 
     X_train, X_test, y_train, y_test = defineTrainTestSets()
 
-    INSHAPE=(NBFRAME,) + SIZE + (CHANNELS,) # (5, 112, 112, 3)
+    INSHAPE=(NBFRAME,) + SIZE + (3,) # (5, 112, 112, 3)
     model = autoencoder_modelLSTM(INSHAPE, 2)
     optimizer = keras.optimizers.Adam(0.001)
     model.compile(
@@ -287,6 +280,8 @@ def train_model():
             'chkp_LSTM/weights.{epoch:02d}-{val_loss:.2f}.hdf5',
             verbose=1),
     ]
+
+    # petit batch size parceque le gpu de mon pc ne supporte pas plus, si vous avez mieux n'hésitez pas à l'augmenter
     model.fit(
         x=X_train,
         y=y_train,
@@ -297,6 +292,7 @@ def train_model():
         callbacks=callbacks
     )
 
+# fonction à appeler pour faire des tests avec un model enregistré, sur une série de séquence
 def testSample(folderPath, model):
     kModel = keras.models.load_model(model)
     print(kModel.summary())
@@ -321,10 +317,3 @@ def testSample(folderPath, model):
     predictions = kModel.predict(sampleList)
     return predictions
 
-defineTrainTestSetsIMU()
-
-# predictionsA = testSample('sampleTestA', 'bestModel.hdf5')
-# print(predictionsA)
-# print('_________________________________________________')
-# predictionsN = testSample('sampleTestN', 'bestModel.hdf5')
-# print(predictionsN)
